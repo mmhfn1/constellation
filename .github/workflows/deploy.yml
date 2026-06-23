@@ -1,0 +1,93 @@
+name: Deploy to GitHub Pages
+
+# Builds frontend/ as a fully self-contained static site (it reads the
+# bundled JSON in frontend/public/data/ — see frontend/src/staticData.js —
+# so no backend needs to be running for the deployed site to work) and
+# publishes it with GitHub's official Pages actions.
+#
+# Triggers on every push to main that touches the frontend or its data, and
+# can also be run by hand from the Actions tab.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "backend/data/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # GitHub Pages project sites (most repos) are served at
+      # https://<user>.github.io/<repo-name>/, so the build needs that repo
+      # name as its base path. The one exception is a repo literally named
+      # <user>.github.io, which GitHub serves at the domain root instead.
+      # This detects which case applies so you don't have to hardcode
+      # either the username or the repo name anywhere.
+      - name: Determine base path
+        id: basepath
+        run: |
+          REPO_NAME="${{ github.event.repository.name }}"
+          if [[ "$REPO_NAME" == *.github.io ]]; then
+            echo "base=/" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=/$REPO_NAME/" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # Re-syncs frontend/public/data/ from backend/data/ in case the
+      # pipeline was re-run and backend/data/*.json changed but someone
+      # forgot to run `npm run sync-data` locally before committing.
+      - name: Sync pipeline data
+        working-directory: frontend
+        run: npm run sync-data
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+        env:
+          BASE_PATH: ${{ steps.basepath.outputs.base }}
+          # To point the deployed site at a live backend instead of the
+          # bundled static data, set VITE_API_BASE_URL as a repository
+          # variable (Settings -> Secrets and variables -> Actions ->
+          # Variables) and uncomment the line below. Leave it unset for the
+          # default fully self-contained static deploy.
+          # VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
