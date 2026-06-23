@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Constellation — Sample (standalone)</title>
+<!--
+  sample.html — a single-file, no-build-step preview of Constellation's map
+  rendering: the deep-space backdrop, the fixed "field star" treatment for
+  unclustered movies, galaxy-style cluster bubbles, the locked Google-Maps-
+  style camera, and eased zoom/pan. It reads the same bundled JSON the main
+  React app does (./data/*.json, relative to this file) and pulls D3 from a
+  CDN — open it straight from a GitHub Pages deploy, or serve this folder
+  locally (`npx serve` / `python3 -m http.server`); opening it directly as a
+  file:// URL won't work since browsers block fetch() for local files.
+
+  This is a preview, not the full app: search, the detail panel, and likes
+  live only in the React build (frontend/src/). Explode/collapse and full
+  sky both work here exactly as they do there.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+  rel="stylesheet"
+/>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<style>
+  :root {
+    --bg: #08090f;
+    --bg-elevated: #11121cdd;
+    --border: rgba(255, 255, 255, 0.09);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text-primary: #edeef5;
+    --text-secondary: #9094b3;
+    --text-tertiary: #5c6080;
+    --accent-gold: #e8b84b;
+    --font-display: "Fraunces", "Iowan Old Style", serif;
+    --font-body: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", monospace;
+    --radius-md: 14px;
+    --radius-lg: 20px;
+    --panel-shadow: 0 20px 60px -20px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text-primary); font-family: var(--font-body); overflow: hidden; }
+  #app { position: relative; width: 100vw; height: 100vh; background: radial-gradient(ellipse 120% 90% at 30% 0%, #11122080 0%, var(--bg) 60%); }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+  .glass-panel { background: var(--bg-elevated); backdrop-filter: blur(18px) saturate(140%); border-radius: var(--radius-lg); box-shadow: var(--panel-shadow); }
+  .panel { position: absolute; top: 22px; left: 22px; width: 280px; padding: 20px; z-index: 10; }
+  .wordmark { font-family: var(--font-display); font-weight: 500; font-size: 21px; margin: 0; }
+  .wordmark .dot { color: var(--accent-gold); }
+  .tagline { font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; margin: 4px 0 16px; }
+  .note { font-size: 11.5px; color: var(--text-tertiary); line-height: 1.6; margin: 14px 0 0; }
+  .ghost-button { width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--text-secondary); font-family: var(--font-mono); font-size: 11.5px; border-radius: 8px; padding: 9px 10px; cursor: pointer; transition: all 0.15s ease; }
+  .ghost-button:hover { border-color: var(--accent-gold); color: var(--accent-gold); }
+  .ghost-button.is-active { background: rgba(232,184,75,0.18); border-color: var(--accent-gold); color: var(--accent-gold); }
+  .hud { position: absolute; bottom: 18px; right: 22px; z-index: 10; font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); display: flex; gap: 14px; padding: 8px 12px; }
+  .hud strong { color: var(--text-secondary); font-weight: 500; }
+  .hint { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 10; font-family: var(--font-mono); font-size: 11.5px; color: var(--text-tertiary); padding: 9px 16px; border-radius: 999px; white-space: nowrap; transition: opacity 0.6s ease; }
+  .hint.is-gone { opacity: 0; pointer-events: none; }
+  .tooltip { position: absolute; z-index: 20; pointer-events: none; background: rgba(8,9,15,0.85); border: 1px solid var(--border-strong); border-radius: 7px; padding: 6px 10px; font-family: var(--font-mono); font-size: 11.5px; color: var(--text-primary); white-space: nowrap; transform: translate(-50%, -130%); display: none; }
+  .status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px; z-index: 30; background: var(--bg); }
+  .status p { color: var(--text-secondary); font-family: var(--font-mono); font-size: 12.5px; max-width: 420px; text-align: center; line-height: 1.6; padding: 0 20px; }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-gold); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.2); } }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="canvas"></canvas>
+  <div class="panel glass-panel">
+    <h1 class="wordmark">Constellation<span class="dot">.</span></h1>
+    <p class="tagline">standalone sample — no build step</p>
+    <button class="ghost-button" id="toggleSky">Reveal full sky</button>
+    <p class="note">Scroll to zoom, drag to pan — the camera is locked to the data, same as the full app. Click a galaxy to explode it into its stars. This preview skips search/likes/detail — see the README to run the full React app.</p>
+  </div>
+  <div class="hud glass-panel" id="hud"></div>
+  <div class="hint glass-panel" id="hint">scroll to zoom · drag to pan · click a galaxy to explode it</div>
+  <div class="tooltip" id="tooltip"></div>
+  <div class="status" id="status">
+    <h1 class="wordmark">Constellation<span class="dot">.</span></h1>
+    <div class="pulse"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- palette (mirrors frontend/src/palette.js) -----------------------
+  const CLUSTER_COLORS = ["#E8B84B","#5FB3D9","#E2667D","#7FD9A6","#B07FE0","#E0935F","#5FD9C8","#D95F9E","#9FD95F","#5F8AE0","#D9C25F","#8E7FE0"];
+  function colorForCluster(id) { return (id === -1 || id == null) ? "#4a4d63" : CLUSTER_COLORS[id % CLUSTER_COLORS.length]; }
+  function hexToRgba(hex, a) {
+    const h = hex.replace("#", "");
+    const full = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
+    const n = parseInt(full, 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+  }
+  const FIELD_TIERS = [
+    { key: "dim", color: "#7782ad", r: 1.5, coreAlpha: 0.42, haloAlpha: 0, threshold: 0.56 },
+    { key: "warm", color: "#d2c08c", r: 1.95, coreAlpha: 0.64, haloAlpha: 0.1, threshold: 0.87 },
+    { key: "bright", color: "#f1f4ff", r: 2.5, coreAlpha: 0.92, haloAlpha: 0.22, threshold: 1.01 },
+  ];
+  function fieldTierFor(u) { for (const t of FIELD_TIERS) if (u < t.threshold) return t; return FIELD_TIERS[FIELD_TIERS.length - 1]; }
+  function hashUnit(id) {
+    const s = String(id);
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return ((h >>> 0) % 100000) / 100000;
+  }
+
+  // ---- constants (mirrors GalaxyCanvas.jsx) -----------------------------
+  const WORLD_SCALE = 70, STAR_RADIUS = 3.1, HIT_TOLERANCE = 10, MAX_ZOOM = 9;
+  const MAX_CORE_SCREEN_PX = 9, MAX_HALO_SCREEN_PX = 13;
+  function screenCappedRadius(worldR, k, maxPx) {
+    const screenPx = worldR * k;
+    return screenPx > maxPx ? maxPx / k : worldR;
+  }
+  const VIEW_PADDING_RATIO = 0.22, GALAXY_COUNT = 3;
+  const PARALLAX_MARGIN = 70, PARALLAX_CLAMP = 280, CAMERA_SMOOTH_TAU = 95, MAX_FRAME_DT = 100;
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const tooltip = document.getElementById("tooltip");
+  const hud = document.getElementById("hud");
+  const hint = document.getElementById("hint");
+  const statusEl = document.getElementById("status");
+  const toggleBtn = document.getElementById("toggleSky");
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  let fullSky = false;
+  let worldNodes = new Map();
+  let clusterMembers = new Map();
+  let centroidNodes = [];
+  const explodedIds = new Set();
+  const explodedSims = new Map();
+  const bursts = [];
+  const comets = [];
+  let nextCometAt = 0;
+  let detailsCache = null; // lazy-loaded movie_details.json, like staticData.js
+  let hovered = null;
+  let transform = d3.zoomIdentity;
+  let target = d3.zoomIdentity;
+  let fitTransform = null;
+  let lastFrameTime = 0;
+  let starfield = null;
+
+  function loadDetails() {
+    if (!detailsCache) detailsCache = fetch("data/movie_details.json").then(r => r.json());
+    return detailsCache;
+  }
+
+  // ---- load data ----------------------------------------------------------
+  Promise.all([
+    fetch("data/graph_tier1.json").then(r => { if (!r.ok) throw new Error("graph_tier1.json " + r.status); return r.json(); }),
+    fetch("data/cluster_summary.json").then(r => { if (!r.ok) throw new Error("cluster_summary.json " + r.status); return r.json(); }),
+  ]).then(([nodes, clusters]) => {
+    statusEl.style.display = "none";
+    init(nodes, clusters);
+  }).catch((err) => {
+    statusEl.innerHTML = `<h1 class="wordmark">Constellation<span class="dot">.</span></h1>
+      <p>Couldn't load the bundled data (${err.message}). If you opened this file
+      directly (file://), browsers block local fetches — serve this folder instead,
+      e.g. <code>npx serve</code> or <code>python3 -m http.server</code>, or view it
+      via the deployed GitHub Pages site.</p>`;
+  });
+
+  function init(nodes, clusters) {
+    for (const n of nodes) {
+      worldNodes.set(n.movie_id, { id: n.movie_id, clusterId: n.cluster_id, trueX: n.x * WORLD_SCALE, trueY: n.y * WORLD_SCALE, unit: hashUnit(n.movie_id) });
+      if (!clusterMembers.has(n.cluster_id)) clusterMembers.set(n.cluster_id, []);
+      clusterMembers.get(n.cluster_id).push(n.movie_id);
+    }
+
+    const sizeScale = d3.scaleSqrt().domain([1, d3.max(clusters, c => c.size) || 1]).range([13, 42]);
+    const galaxyIds = new Set([...clusters].sort((a, b) => b.size - a.size).slice(0, Math.min(GALAXY_COUNT, clusters.length)).map(c => c.cluster_id));
+    centroidNodes = clusters.map(c => {
+      const rng = d3.randomLcg(((c.cluster_id + 1) * 0.0131) % 1 || 0.5);
+      const scatterCount = 5 + Math.floor(rng() * 4);
+      const scatter = Array.from({ length: scatterCount }, () => {
+        const angle = rng() * Math.PI * 2, radius = 0.22 + rng() * 0.68;
+        return { dx: Math.cos(angle) * radius, dy: Math.sin(angle) * radius, r: 0.6 + rng() * 1.15, alpha: 0.32 + rng() * 0.48 };
+      });
+      return {
+        clusterId: c.cluster_id, trueX: c.x * WORLD_SCALE, trueY: c.y * WORLD_SCALE,
+        x: c.x * WORLD_SCALE, y: c.y * WORLD_SCALE, r: sizeScale(c.size), size: c.size, label: c.label,
+        isGalaxy: galaxyIds.has(c.cluster_id), spiralSeed: rng() * Math.PI * 2, scatter,
+      };
+    });
+    d3.forceSimulation(centroidNodes)
+      .force("collide", d3.forceCollide(d => d.r + 6).strength(0.85))
+      .force("anchorX", d3.forceX(d => d.trueX).strength(0.12))
+      .force("anchorY", d3.forceY(d => d.trueY).strength(0.12))
+      .alphaDecay(0.02);
+
+    setupCanvasAndInteraction();
+  }
+
+  function computeWorldBounds() {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [, wn] of worldNodes) { if (wn.trueX < minX) minX = wn.trueX; if (wn.trueX > maxX) maxX = wn.trueX; if (wn.trueY < minY) minY = wn.trueY; if (wn.trueY > maxY) maxY = wn.trueY; }
+    for (const c of centroidNodes) { if (c.trueX < minX) minX = c.trueX; if (c.trueX > maxX) maxX = c.trueX; if (c.trueY < minY) minY = c.trueY; if (c.trueY > maxY) maxY = c.trueY; }
+    if (!isFinite(minX)) return null;
+    const spanX = Math.max(maxX - minX, 200), spanY = Math.max(maxY - minY, 200);
+    const padX = spanX * VIEW_PADDING_RATIO, padY = spanY * VIEW_PADDING_RATIO;
+    return { minX: minX - padX, maxX: maxX + padX, minY: minY - padY, maxY: maxY + padY };
+  }
+
+  let zoomBehavior, selection;
+
+  function applyViewLock(w, h) {
+    const bounds = computeWorldBounds();
+    if (!bounds || !w || !h) return null;
+    const spanX = bounds.maxX - bounds.minX, spanY = bounds.maxY - bounds.minY;
+    const fitK = Math.min(w / spanX, h / spanY, 2.5);
+    zoomBehavior.extent([[0, 0], [w, h]]);
+    zoomBehavior.scaleExtent([fitK, MAX_ZOOM]);
+    zoomBehavior.translateExtent([[bounds.minX, bounds.minY], [bounds.maxX, bounds.maxY]]);
+    return { bounds, fitK };
+  }
+
+  function fitToView() {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const lock = applyViewLock(w, h);
+    if (!lock) return;
+    const { bounds, fitK } = lock;
+    const cx = (bounds.minX + bounds.maxX) / 2, cy = (bounds.minY + bounds.maxY) / 2;
+    const t = d3.zoomIdentity.translate(w / 2 - cx * fitK, h / 2 - cy * fitK).scale(fitK);
+    zoomBehavior.transform(selection, t);
+    fitTransform = t; transform = t; target = t;
+  }
+
+  function buildStarfield(w, h) {
+    const ow = w + PARALLAX_MARGIN * 2, oh = h + PARALLAX_MARGIN * 2;
+    function makeLayer() { const c = document.createElement("canvas"); c.width = ow; c.height = oh; return c; }
+
+    const nebula = makeLayer(), nctx = nebula.getContext("2d");
+    const nebRng = d3.randomLcg(0.4271);
+    const hues = ["#241a4a", "#142d33", "#3a1d33", "#16213d", "#2c1a22"];
+    for (let i = 0; i < 5; i++) {
+      const cx = nebRng() * ow, cy = nebRng() * oh, r = (0.35 + nebRng() * 0.4) * Math.max(ow, oh);
+      const g = nctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      const color = hues[i % hues.length];
+      g.addColorStop(0, hexToRgba(color, 0.5)); g.addColorStop(0.6, hexToRgba(color, 0.16)); g.addColorStop(1, hexToRgba(color, 0));
+      nctx.fillStyle = g; nctx.fillRect(0, 0, ow, oh);
+    }
+    const curioRng = d3.randomLcg(0.8123);
+    const bhx = curioRng() * ow, bhy = curioRng() * oh * 0.7, bhR = 9 + curioRng() * 5;
+    const disk = nctx.createRadialGradient(bhx, bhy, bhR * 0.4, bhx, bhy, bhR * 2.6);
+    disk.addColorStop(0, "rgba(0,0,0,0)"); disk.addColorStop(0.38, "rgba(0,0,0,0)");
+    disk.addColorStop(0.55, hexToRgba("#e8b84b", 0.22)); disk.addColorStop(0.7, hexToRgba("#5fb3d9", 0.1)); disk.addColorStop(1, "rgba(0,0,0,0)");
+    nctx.fillStyle = disk; nctx.beginPath(); nctx.arc(bhx, bhy, bhR * 2.6, 0, Math.PI * 2); nctx.fill();
+    nctx.fillStyle = "#05060a"; nctx.beginPath(); nctx.arc(bhx, bhy, bhR * 0.85, 0, Math.PI * 2); nctx.fill();
+
+    const remRng = d3.randomLcg(0.5566);
+    const rx = remRng() * ow, ry = remRng() * oh;
+    for (let ring = 0; ring < 3; ring++) {
+      nctx.beginPath(); nctx.arc(rx, ry, 14 + ring * 11, 0, Math.PI * 2);
+      nctx.strokeStyle = hexToRgba(ring % 2 === 0 ? "#e2667d" : "#5fd9c8", 0.07 - ring * 0.012);
+      nctx.lineWidth = 2.5; nctx.stroke();
+    }
+
+    function paintStars(c2x, density, rRange, aRange, mix) {
+      const rng = d3.randomLcg((density * 7.13) % 1 || 0.31);
+      const n = Math.floor((ow * oh) / density);
+      for (let i = 0; i < n; i++) {
+        const x = rng() * ow, y = rng() * oh, r = rRange[0] + rng() * (rRange[1] - rRange[0]), a = aRange[0] + rng() * (aRange[1] - aRange[0]);
+        const tint = rng();
+        c2x.fillStyle = tint < mix[0] ? "#cfd6ff" : tint < mix[1] ? "#fff3d6" : "#ffffff";
+        c2x.globalAlpha = a; c2x.beginPath(); c2x.arc(x, y, r, 0, Math.PI * 2); c2x.fill();
+      }
+      c2x.globalAlpha = 1;
+    }
+    const far = makeLayer(); paintStars(far.getContext("2d"), 1900, [0.35, 0.9], [0.18, 0.45], [0.5, 0.85]);
+    const mid = makeLayer(); paintStars(mid.getContext("2d"), 5200, [0.6, 1.4], [0.3, 0.6], [0.45, 0.8]);
+    const near = makeLayer(); paintStars(near.getContext("2d"), 16000, [0.9, 2.1], [0.45, 0.85], [0.4, 0.75]);
+
+    starfield = { nebula, far, mid, near, ow, oh };
+  }
+
+  function setupCanvasAndInteraction() {
+    const appEl = document.getElementById("app");
+    function resize() {
+      const w = appEl.clientWidth, h = appEl.clientHeight;
+      canvas.style.width = w + "px"; canvas.style.height = h + "px";
+      canvas.width = w * dpr; canvas.height = h * dpr;
+      buildStarfield(w, h);
+      if (zoomBehavior) applyViewLock(w, h);
+    }
+
+    zoomBehavior = d3.zoom().scaleExtent([0.05, MAX_ZOOM]).filter(e => !e.button).on("zoom", e => { target = e.transform; });
+    selection = d3.select(canvas);
+    selection.call(zoomBehavior);
+    selection.on("dblclick.zoom", null);
+
+    window.addEventListener("resize", resize);
+    resize();
+    setTimeout(fitToView, 60);
+
+    function pointerToWorld(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      return { x: (clientX - rect.left - transform.x) / transform.k, y: (clientY - rect.top - transform.y) / transform.k };
+    }
+    function starCandidates() {
+      if (fullSky) { const out = []; for (const [id, wn] of worldNodes) out.push({ id, clusterId: wn.clusterId, x: wn.trueX, y: wn.trueY, kind: "star" }); return out; }
+      const out = [];
+      for (const [id, wn] of worldNodes) if (wn.clusterId === -1) out.push({ id, clusterId: wn.clusterId, x: wn.trueX, y: wn.trueY, kind: "star" });
+      for (const [clusterId, { simNodes }] of explodedSims) for (const sn of simNodes) out.push({ id: sn.id, clusterId, x: sn.x, y: sn.y, kind: "star" });
+      return out;
+    }
+    function hitCentroid(x, y) {
+      let best = null, bestDist = Infinity;
+      for (const c of centroidNodes) {
+        if (explodedIds.has(c.clusterId)) continue;
+        const d = Math.hypot(c.x - x, c.y - y);
+        if (d <= c.r + 6 && d < bestDist) { bestDist = d; best = { id: `cluster:${c.clusterId}`, clusterId: c.clusterId, x: c.x, y: c.y, kind: "centroid" }; }
+      }
+      return best;
+    }
+    function findNearest(clientX, clientY) {
+      const { x, y } = pointerToWorld(clientX, clientY);
+      if (!fullSky) { const c = hitCentroid(x, y); if (c) return c; }
+      const candidates = starCandidates();
+      if (!candidates.length) return null;
+      const tree = d3.quadtree(candidates, d => d.x, d => d.y);
+      return tree.find(x, y, HIT_TOLERANCE / transform.k + 8);
+    }
+
+    let lastMoveAt = 0;
+    canvas.addEventListener("mousemove", (e) => {
+      const now = performance.now();
+      if (now - lastMoveAt < 28) return;
+      lastMoveAt = now;
+      const hit = findNearest(e.clientX, e.clientY);
+      hovered = hit ? hit.id : null;
+      canvas.style.cursor = hit ? "pointer" : "grab";
+      if (!hit) { tooltip.style.display = "none"; return; }
+      tooltip.style.left = e.clientX + "px"; tooltip.style.top = e.clientY + "px"; tooltip.style.display = "block";
+      if (hit.kind === "centroid") {
+        const c = centroidNodes.find(c => c.clusterId === hit.clusterId);
+        tooltip.textContent = c ? c.label : "";
+      } else {
+        tooltip.textContent = "…";
+        loadDetails().then(details => { if (hovered === hit.id && details[hit.id]) tooltip.textContent = details[hit.id].title; });
+      }
+    });
+    canvas.addEventListener("mouseleave", () => { hovered = null; tooltip.style.display = "none"; });
+    canvas.addEventListener("click", (e) => {
+      const hit = findNearest(e.clientX, e.clientY);
+      if (!hit || hit.kind !== "centroid") return;
+      hint.classList.add("is-gone");
+      toggleExplode(hit.clusterId);
+    });
+
+    toggleBtn.addEventListener("click", () => {
+      fullSky = !fullSky;
+      toggleBtn.textContent = fullSky ? "★ Full sky" : "Reveal full sky";
+      toggleBtn.classList.toggle("is-active", fullSky);
+      hint.classList.add("is-gone");
+    });
+
+    requestAnimationFrame(draw);
+  }
+
+  function toggleExplode(clusterId) {
+    if (explodedIds.has(clusterId)) {
+      explodedIds.delete(clusterId);
+      const entry = explodedSims.get(clusterId);
+      if (entry) entry.sim.stop();
+      explodedSims.delete(clusterId);
+      return;
+    }
+    explodedIds.add(clusterId);
+    const centroid = centroidNodes.find(c => c.clusterId === clusterId);
+    if (!centroid) return;
+    bursts.push({ x: centroid.x, y: centroid.y, start: performance.now(), color: colorForCluster(clusterId) });
+    const ids = clusterMembers.get(clusterId) || [];
+    const simNodes = ids.map(id => {
+      const wn = worldNodes.get(id);
+      return { id, clusterId, trueX: wn.trueX, trueY: wn.trueY, x: centroid.x + (Math.random() - 0.5) * 4, y: centroid.y + (Math.random() - 0.5) * 4 };
+    });
+    const sim = d3.forceSimulation(simNodes)
+      .force("collide", d3.forceCollide(STAR_RADIUS + 1.4).strength(1))
+      .force("anchorX", d3.forceX(d => d.trueX).strength(0.09))
+      .force("anchorY", d3.forceY(d => d.trueY).strength(0.09))
+      .alphaDecay(0.028);
+    explodedSims.set(clusterId, { sim, simNodes });
+  }
+
+  function drawBackground(now) {
+    if (!starfield) return;
+    const dx = fitTransform ? clamp(transform.x - fitTransform.x, -PARALLAX_CLAMP, PARALLAX_CLAMP) : 0;
+    const dy = fitTransform ? clamp(transform.y - fitTransform.y, -PARALLAX_CLAMP, PARALLAX_CLAMP) : 0;
+    function layer(c2, factor, alpha) {
+      const ox = clamp(dx * factor, -PARALLAX_MARGIN + 4, PARALLAX_MARGIN - 4);
+      const oy = clamp(dy * factor, -PARALLAX_MARGIN + 4, PARALLAX_MARGIN - 4);
+      ctx.globalAlpha = alpha; ctx.drawImage(c2, -PARALLAX_MARGIN - ox, -PARALLAX_MARGIN - oy, starfield.ow, starfield.oh); ctx.globalAlpha = 1;
+    }
+    layer(starfield.nebula, 0.012, 1);
+    layer(starfield.far, 0.022, 0.55 + 0.45 * Math.sin(now * 0.00017));
+    layer(starfield.mid, 0.038, 0.6 + 0.4 * Math.sin(now * 0.00025 + 2.1));
+    layer(starfield.near, 0.055, 0.7 + 0.3 * Math.sin(now * 0.00032 + 4.2));
+  }
+
+  function drawComets(w, h, now) {
+    if (now > nextCometAt && comets.length < 2) {
+      const fromLeft = Math.random() < 0.5, len = 130 + Math.random() * 170, angle = Math.PI / 7 + Math.random() * 0.3, dir = fromLeft ? 1 : -1;
+      comets.push({ x0: fromLeft ? -30 : w + 30, y0: Math.random() * h * 0.55, dx: Math.cos(angle) * len * dir, dy: Math.sin(angle) * len, start: now, duration: 850 + Math.random() * 500 });
+      nextCometAt = now + 5500 + Math.random() * 9000;
+    }
+    for (let i = comets.length - 1; i >= 0; i--) if (now - comets[i].start > comets[i].duration) comets.splice(i, 1);
+    for (const c of comets) {
+      const p = (now - c.start) / c.duration;
+      const easeIn = p < 0.15 ? p / 0.15 : 1, easeOut = p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1, amt = easeIn * easeOut;
+      const head = Math.min(p * 1.2, 1), tail = Math.max(p * 1.2 - 0.45, 0);
+      const hx = c.x0 + c.dx * head, hy = c.y0 + c.dy * head, tx = c.x0 + c.dx * tail, ty = c.y0 + c.dy * tail;
+      const grad = ctx.createLinearGradient(tx, ty, hx, hy);
+      grad.addColorStop(0, "rgba(230,238,255,0)"); grad.addColorStop(1, `rgba(230,238,255,${0.85 * amt})`);
+      ctx.strokeStyle = grad; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(hx, hy); ctx.stroke();
+      ctx.beginPath(); ctx.arc(hx, hy, 1.5, 0, Math.PI * 2); ctx.fillStyle = `rgba(255,255,255,${0.9 * amt})`; ctx.fill();
+    }
+  }
+
+  // Unclustered ("noise", cluster_id -1) movies have no centroid bubble to
+  // live in, so without this they're simply never drawn outside full sky —
+  // including whatever a search/click might resolve to. Drawn underneath
+  // the galaxy bubbles in overview mode too, same field-star styling as
+  // full sky.
+  function drawFieldStars(k) {
+    const coreGroups = new Map(), haloGroups = new Map(), styleMeta = new Map();
+    for (const [, wn] of worldNodes) {
+      if (wn.clusterId !== -1) continue;
+      const tier = fieldTierFor(wn.unit);
+      const r = screenCappedRadius(tier.r, k, MAX_CORE_SCREEN_PX);
+      const haloR = screenCappedRadius(tier.r * 2.5, k, MAX_HALO_SCREEN_PX);
+      const style = { key: tier.key, color: tier.color, r, coreAlpha: tier.coreAlpha, haloAlpha: tier.haloAlpha, haloR };
+      if (!coreGroups.has(style.key)) { coreGroups.set(style.key, new Path2D()); haloGroups.set(style.key, new Path2D()); styleMeta.set(style.key, style); }
+      const core = coreGroups.get(style.key);
+      core.moveTo(wn.trueX + style.r, wn.trueY); core.arc(wn.trueX, wn.trueY, style.r, 0, Math.PI * 2);
+      if (style.haloAlpha > 0) { const halo = haloGroups.get(style.key); halo.moveTo(wn.trueX + style.haloR, wn.trueY); halo.arc(wn.trueX, wn.trueY, style.haloR, 0, Math.PI * 2); }
+    }
+    for (const [key, style] of styleMeta) { if (style.haloAlpha <= 0) continue; ctx.fillStyle = style.color; ctx.globalAlpha = style.haloAlpha; ctx.fill(haloGroups.get(key)); }
+    for (const [key, style] of styleMeta) { ctx.fillStyle = style.color; ctx.globalAlpha = style.coreAlpha; ctx.fill(coreGroups.get(key)); }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawFullSky(k) {
+    const coreGroups = new Map(), haloGroups = new Map(), styleMeta = new Map();
+    for (const [, wn] of worldNodes) {
+      let style;
+      if (wn.clusterId === -1) {
+        const tier = fieldTierFor(wn.unit);
+        const r = screenCappedRadius(tier.r, k, MAX_CORE_SCREEN_PX);
+        const haloR = screenCappedRadius(tier.r * 2.5, k, MAX_HALO_SCREEN_PX);
+        style = { key: tier.key, color: tier.color, r, coreAlpha: tier.coreAlpha, haloAlpha: tier.haloAlpha, haloR };
+      } else {
+        const r = screenCappedRadius(STAR_RADIUS, k, MAX_CORE_SCREEN_PX);
+        const haloR = screenCappedRadius(STAR_RADIUS * 2.2, k, MAX_HALO_SCREEN_PX);
+        style = { key: "c:" + wn.clusterId, color: colorForCluster(wn.clusterId), r, coreAlpha: 0.88, haloAlpha: 0.15, haloR };
+      }
+      if (!coreGroups.has(style.key)) { coreGroups.set(style.key, new Path2D()); haloGroups.set(style.key, new Path2D()); styleMeta.set(style.key, style); }
+      const core = coreGroups.get(style.key);
+      core.moveTo(wn.trueX + style.r, wn.trueY); core.arc(wn.trueX, wn.trueY, style.r, 0, Math.PI * 2);
+      if (style.haloAlpha > 0) { const halo = haloGroups.get(style.key); halo.moveTo(wn.trueX + style.haloR, wn.trueY); halo.arc(wn.trueX, wn.trueY, style.haloR, 0, Math.PI * 2); }
+    }
+    for (const [key, style] of styleMeta) { if (style.haloAlpha <= 0) continue; ctx.fillStyle = style.color; ctx.globalAlpha = style.haloAlpha; ctx.fill(haloGroups.get(key)); }
+    for (const [key, style] of styleMeta) { ctx.fillStyle = style.color; ctx.globalAlpha = style.coreAlpha; ctx.fill(coreGroups.get(key)); }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawCentroids(k, now) {
+    for (const c of centroidNodes) {
+      if (explodedIds.has(c.clusterId)) continue;
+      const color = colorForCluster(c.clusterId);
+      const r = c.r;
+      const glowR = r * 1.75;
+      const glow = ctx.createRadialGradient(c.x, c.y, r * 0.15, c.x, c.y, glowR);
+      glow.addColorStop(0, hexToRgba(color, 0.32)); glow.addColorStop(0.55, hexToRgba(color, 0.11)); glow.addColorStop(1, hexToRgba(color, 0));
+      ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(c.x, c.y, glowR, 0, Math.PI * 2); ctx.fill();
+
+      if (c.isGalaxy) {
+        const rot = c.spiralSeed + now * 0.000012;
+        ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(rot);
+        ctx.strokeStyle = hexToRgba(color, 0.16); ctx.lineWidth = Math.max(0.8, r * 0.05);
+        for (let arm = 0; arm < 2; arm++) {
+          ctx.beginPath();
+          const armRot = arm * Math.PI;
+          for (let a = 0; a <= Math.PI * 1.35; a += 0.14) {
+            const rad = (a / (Math.PI * 1.35)) * r * 1.55;
+            const x = Math.cos(a + armRot) * rad, y = Math.sin(a + armRot) * rad * 0.68;
+            if (a === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      const core = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, r);
+      core.addColorStop(0, "rgba(255,255,255,0.88)"); core.addColorStop(0.2, hexToRgba(color, 0.82)); core.addColorStop(1, hexToRgba(color, 0.04));
+      ctx.fillStyle = core; ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.fill();
+
+      ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+      ctx.lineWidth = 1 / k; ctx.strokeStyle = hexToRgba(color, 0.45); ctx.stroke();
+
+      for (const s of c.scatter) {
+        ctx.beginPath(); ctx.arc(c.x + s.dx * r, c.y + s.dy * r, s.r, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff"; ctx.globalAlpha = s.alpha; ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawExploded(k) {
+    for (const [clusterId, { simNodes }] of explodedSims) {
+      const color = colorForCluster(clusterId);
+      const haloR = screenCappedRadius(STAR_RADIUS * 2.2, k, MAX_HALO_SCREEN_PX);
+      const r = screenCappedRadius(STAR_RADIUS, k, MAX_CORE_SCREEN_PX);
+      const halo = new Path2D(), core = new Path2D();
+      for (const sn of simNodes) {
+        halo.moveTo(sn.x + haloR, sn.y); halo.arc(sn.x, sn.y, haloR, 0, Math.PI * 2);
+        core.moveTo(sn.x + r, sn.y); core.arc(sn.x, sn.y, r, 0, Math.PI * 2);
+      }
+      ctx.fillStyle = color; ctx.globalAlpha = 0.16; ctx.fill(halo); ctx.globalAlpha = 1; ctx.fill(core);
+    }
+  }
+
+  function draw(now) {
+    if (!lastFrameTime) lastFrameTime = now;
+    const dt = Math.min(now - lastFrameTime, MAX_FRAME_DT);
+    lastFrameTime = now;
+
+    const smoothing = 1 - Math.exp(-dt / CAMERA_SMOOTH_TAU);
+    if (Math.abs(target.k - transform.k) < 0.0003 && Math.abs(target.x - transform.x) < 0.05 && Math.abs(target.y - transform.y) < 0.05) {
+      transform = target;
+    } else {
+      transform = d3.zoomIdentity.translate(transform.x + (target.x - transform.x) * smoothing, transform.y + (target.y - transform.y) * smoothing).scale(transform.k + (target.k - transform.k) * smoothing);
+    }
+
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    ctx.save(); ctx.scale(dpr, dpr); ctx.clearRect(0, 0, w, h);
+    drawBackground(now);
+    drawComets(w, h, now);
+
+    const t = transform;
+    ctx.translate(t.x, t.y); ctx.scale(t.k, t.k);
+
+    for (let i = bursts.length - 1; i >= 0; i--) if (now - bursts[i].start > 900) bursts.splice(i, 1);
+    for (const b of bursts) {
+      const p = (now - b.start) / 750;
+      const flash = Math.max(0, 1 - p * 3);
+      if (flash > 0) { ctx.beginPath(); ctx.arc(b.x, b.y, 4 + p * 16, 0, Math.PI * 2); ctx.fillStyle = `rgba(255,250,235,${flash * 0.75})`; ctx.fill(); }
+      for (let ring = 0; ring < 2; ring++) {
+        const rp = p - ring * 0.14;
+        if (rp <= 0 || rp >= 1) continue;
+        ctx.beginPath(); ctx.arc(b.x, b.y, 8 + rp * 110, 0, Math.PI * 2);
+        ctx.strokeStyle = hexToRgba(b.color, 0.5 * (1 - rp)); ctx.lineWidth = (ring === 0 ? 2.1 : 1.1) / t.k; ctx.stroke();
+      }
+    }
+
+    if (fullSky) drawFullSky(t.k); else { drawFieldStars(t.k); drawCentroids(t.k, now); drawExploded(t.k); }
+
+    ctx.restore();
+    hud.innerHTML = `<span><strong>${(fullSky ? worldNodes.size : centroidNodes.length).toLocaleString()}</strong> ${fullSky ? "movies" : "archetypes"}</span><span>zoom <strong>${t.k.toFixed(2)}×</strong></span>`;
+    requestAnimationFrame(draw);
+  }
+})();
+</script>
+</body>
+</html>
