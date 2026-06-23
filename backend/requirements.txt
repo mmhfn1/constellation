@@ -1,0 +1,32 @@
+# --- Core API ---
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+
+# --- Data / ML ---
+pandas==2.2.2
+numpy>=1.26,<2.0
+scikit-learn==1.5.1
+scipy==1.13.1
+
+# PyTorch — install the build that matches your CUDA version, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+# CPU-only fallback (slower, no GPU required):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#
+# A range, not an exact pin: an exact pin (e.g. torch==2.4.0) is the most
+# common cause of pip dependency-resolver conflicts if you install this into
+# an environment that already has torch-dependent packages (torchvision,
+# torchaudio, etc.) expecting a specific version. If you hit that anyway,
+# the real fix is a dedicated virtual environment for this project (see
+# README "Running it locally") rather than chasing version ranges further.
+torch>=2.2,<2.6
+
+sentence-transformers==3.0.1   # wraps all-MiniLM-L6-v2
+hdbscan==0.8.40
+umap-learn==0.5.6              # 2D projection of the latent space for the map
+
+# --- Storage ---
+SQLAlchemy==2.0.32              # SQLite ORM for the feedback loop
+
+python-multipart==0.0.9
